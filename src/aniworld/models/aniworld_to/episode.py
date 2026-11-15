@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from ...config import (
     ANIWORLD_EPISODE_PATTERN,
+    GERMAN_SUB_DUB,
     GLOBAL_SESSION,
     LANG_KEY_MAP,
     LANG_LABELS,
@@ -27,6 +28,7 @@ from ..common.extraction import resolve_stream_url
 from ..common.naming import existing_numbered_episode_path
 from ..common.numbering import episode_number_from_title
 from ..common.paths import resolve_download_path
+from .download import download_german_sub_dub
 
 
 class AniworldEpisode:
@@ -497,7 +499,11 @@ class AniworldEpisode:
         return provider_dict or None
 
     # Episode actions are implemented in aniworld.models.common.common
-    download = episode_download
+    def download(self):
+        if self.selected_language == GERMAN_SUB_DUB:
+            return download_german_sub_dub(self)
+        return episode_download(self)
+
     watch = episode_watch
     syncplay = episode_syncplay
 

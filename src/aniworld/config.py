@@ -357,6 +357,8 @@ class Subtitles(Enum):
     ENGLISH = "English"
 
 
+GERMAN_SUB_DUB = "German Sub+Dub"
+
 # Map site-specific language keys to semantic meaning
 LANG_KEY_MAP = {
     "1": (Audio.GERMAN, Subtitles.NONE),  # German Dub

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from .arguments import parse_args
-from .config import ACTION_METHODS, ANIWORLD_CONFIG_DIR, VERSION
+from .config import ACTION_METHODS, ANIWORLD_CONFIG_DIR, GERMAN_SUB_DUB, VERSION
 from .env import merge_env
 from .logger import get_logger
 from .models.common import run_each
@@ -70,6 +70,8 @@ def run_action(obj, action: str):
 def model_for_url(url):
     url = normalize_url(url)
     provider = resolve_provider(url)
+    if os.getenv("ANIWORLD_LANGUAGE") == GERMAN_SUB_DUB and provider.name != "AniWorld":
+        raise ValueError(f'"{GERMAN_SUB_DUB}" is only available for AniWorld downloads')
     # A video URL is one episode even when a site's franchise pattern overlaps.
     for pattern, model in (
         (provider.episode_pattern, provider.episode_cls),
@@ -133,7 +135,10 @@ def aniworld():
         action = (args.action or "download").lower()
 
         # ===== no-menu path =====
-        if os.getenv("ANIWORLD_NO_MENU") == "1":
+        if (
+            os.getenv("ANIWORLD_NO_MENU") == "1"
+            or os.getenv("ANIWORLD_LANGUAGE") == GERMAN_SUB_DUB
+        ):
             urls = args.url
             logger.debug(urls)
 

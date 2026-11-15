@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import ffmpeg
 import niquests
@@ -1168,6 +1169,8 @@ def _download_full_stream(
     video_codec,
     ep_label,
     audio_code,
+    *,
+    video_only=False,
 ):
     """Fetch audio+video into `temp_full`.
 
@@ -1175,7 +1178,22 @@ def _download_full_stream(
     hosters that disguise segments with non-media extensions); it opts out for
     normal/encrypted playlists, which then take the FFmpeg path.
     """
+    output_kwargs = {"vcodec": video_codec, **stream_metadata}
+    if video_only:
+        output_kwargs["map"] = "0:v:0"
+        output_kwargs["xerror"] = None
+    else:
+        output_kwargs["acodec"] = "copy"
+
+    def save(input_stream):
+        node = input_stream.output(str(temp_full), **output_kwargs)
+        _run_ffmpeg_with_progress(node, label=ep_label)
+
     if ".m3u8" in stream_url.split("?", 1)[0].lower():
+        if video_only and _download_parallel_hls_track(
+            stream_url, headers, temp_full, ep_label, save
+        ):
+            return
         temp_ts = temp_full.with_suffix(".seg.ts")
         try:
             _download_hls_manual(stream_url, headers, temp_ts, ep_label)
@@ -1183,28 +1201,73 @@ def _download_full_stream(
             logger.debug(f"[HLS] manual fetch not used ({exc}); using FFmpeg")
         else:
             try:
-                _run_ffmpeg_with_progress(
-                    ffmpeg.input(str(temp_ts)).output(
-                        str(temp_full),
-                        vcodec=video_codec,
-                        acodec="copy",
-                        **stream_metadata,
-                    ),
-                    label=ep_label,
-                )
+                save(ffmpeg.input(str(temp_ts)))
                 return
             finally:
                 temp_ts.unlink(missing_ok=True)
 
-    _run_ffmpeg_with_progress(
-        ffmpeg.input(stream_url, **input_kwargs).output(
-            str(temp_full),
-            vcodec=video_codec,
+    save(ffmpeg.input(stream_url, **input_kwargs))
+
+
+def _download_input_kwargs(stream_url, headers):
+    options = {"reconnect": 1, "reconnect_streamed": 1, "reconnect_delay_max": 30}
+    if headers:
+        options["headers"] = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+    if ".m3u8" in urlsplit(stream_url).path.lower():
+        options["allowed_extensions"] = "ALL"
+    return options
+
+
+def _download_parallel_hls_track(url, headers, target, label, save):
+    from .hls import HLSUnsupported, cleanup_temp_files, download_hls_parallel
+
+    prefix = target.with_suffix(".hlswork")
+    try:
+        (media_path,) = download_hls_parallel(
+            url, prefix, headers=headers, label=label, include_audio_rendition=False
+        )
+        save(ffmpeg.input(str(media_path)))
+        return True
+    except HLSUnsupported:
+        return False
+    finally:
+        cleanup_temp_files(prefix)
+
+
+def _download_audio_track(stream_url, provider, headers, target, language, label):
+    from .hls import AUDIO_TRACK_FILTER_PROVIDERS, find_audio_only_playlist
+
+    def save(input_stream):
+        node = input_stream.output(
+            str(target),
             acodec="copy",
-            **stream_metadata,
-        ),
-        label=ep_label,
-    )
+            map="0:a:0",
+            xerror=None,
+            **{"metadata:s:a:0": f"language={language}"},
+        )
+        _run_ffmpeg_with_progress(node, label=label)
+
+    try:
+        audio_url = find_audio_only_playlist(stream_url, provider, headers)
+        if audio_url:
+            logger.info(f"[{provider}] Downloading the audio-only playlist")
+            if not _download_parallel_hls_track(
+                audio_url, headers, target, label, save
+            ):
+                save(
+                    ffmpeg.input(
+                        audio_url, **_download_input_kwargs(audio_url, headers)
+                    )
+                )
+            return
+    except (niquests.RequestException, RuntimeError):
+        target.unlink(missing_ok=True)
+
+    if provider in AUDIO_TRACK_FILTER_PROVIDERS:
+        logger.warning(
+            f"[{provider}] Audio-only download unavailable. The original stream may transfer video data."
+        )
+    save(ffmpeg.input(stream_url, **_download_input_kwargs(stream_url, headers)))
 
 
 def download(self):
@@ -1235,14 +1298,6 @@ def download(self):
                 _reset_provider_resolution_cache(self)
                 headers = PROVIDER_HEADERS_D.get(provider_name, {})
                 check = check_downloaded(self._episode_path)
-                input_kwargs = {
-                    "reconnect": 1,
-                    "reconnect_streamed": 1,
-                    "reconnect_delay_max": 30,  # wait up to 30s for connection recovery
-                }
-                if headers:
-                    header_list = [f"{k}: {v}" for k, v in headers.items()]
-                    input_kwargs["headers"] = "\r\n".join(header_list) + "\r\n"
 
                 # Covers every host in config.STO_DOMAINS/STO_IP
                 is_serienstream = is_sto_host(getattr(self, "url", "") or "")
@@ -1286,10 +1341,7 @@ def download(self):
                     return
 
                 stream_url = self.stream_url
-                # Some hosters disguise HLS segments as images. FFmpeg needs
-                # these extensions allowed when fetching an m3u8 source.
-                if ".m3u8" in (stream_url or "").split("?", 1)[0].lower():
-                    input_kwargs["allowed_extensions"] = "ALL"
+                input_kwargs = _download_input_kwargs(stream_url, headers)
 
                 os.makedirs(self._folder_path, exist_ok=True)
 
@@ -1416,14 +1468,13 @@ def download(self):
                             finally:
                                 cleanup_temp_files(temp_prefix)
                     if not audio_done:
-                        _run_ffmpeg_with_progress(
-                            ffmpeg.input(stream_url, **input_kwargs).output(
-                                str(temp_audio),
-                                acodec="copy",
-                                map="0:a:0?",
-                                **{"metadata:s:a:0": f"language={audio_code}"},
-                            ),
-                            label=ep_label,
+                        _download_audio_track(
+                            stream_url,
+                            provider_name,
+                            headers,
+                            temp_audio,
+                            audio_code,
+                            ep_label,
                         )
 
                 if need_video:

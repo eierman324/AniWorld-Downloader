@@ -8,6 +8,7 @@ from packaging.version import parse as parse_version
 from .anime4k import anime4k
 from .config import (
     ACTION_METHODS,
+    GERMAN_SUB_DUB,
     LANG_LABELS,
     SUPPORTED_PROVIDERS,
     VERSION,
@@ -204,7 +205,7 @@ def parse_args():
     playback.add_argument(
         "-l",
         "--language",
-        choices=sorted(LANG_LABELS.values()),
+        choices=sorted((*LANG_LABELS.values(), GERMAN_SUB_DUB)),
         help="Choose language",
     )
     playback.add_argument(
@@ -370,6 +371,11 @@ def parse_args():
     )
 
     args = parser.parse_args()
+
+    if args.language == GERMAN_SUB_DUB and (
+        args.action not in (None, "Download") or args.provider_url or args.web_ui
+    ):
+        parser.error(f'"{GERMAN_SUB_DUB}" requires an AniWorld download URL')
 
     if args.examples:
         print(EXAMPLES)

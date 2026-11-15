@@ -18,7 +18,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import niquests
 
@@ -51,6 +51,7 @@ _LANG_NAME_HINTS = {
 }
 
 _ATTR_RE = re.compile(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)')
+AUDIO_TRACK_FILTER_PROVIDERS = frozenset({"VOE", "Filemoon"})
 
 
 def get_concurrency():
@@ -129,7 +130,7 @@ def _default_headers(headers):
 def _fetch_text(url, headers):
     resp = _session().get(url, headers=headers, timeout=SEGMENT_TIMEOUT)
     resp.raise_for_status()
-    return resp.text
+    return resp.text or ""
 
 
 def _fetch_bytes(url, headers):
@@ -199,6 +200,34 @@ def _parse_master_playlist(text, base_url):
             )
 
     return variants, renditions
+
+
+def find_audio_only_playlist(stream_url, provider, headers):
+    """Select an advertised AAC-only variant from the provider's track filter."""
+    url = urlsplit(stream_url)
+    if provider not in AUDIO_TRACK_FILTER_PROVIDERS or not url.path.endswith(
+        "/master.m3u8"
+    ):
+        return None
+
+    master = url._replace(path=url.path.removesuffix(".m3u8") + "-a1.m3u8").geturl()
+    playlist = _fetch_text(master, _default_headers(headers))
+    if not playlist or not playlist.lstrip().startswith("#EXTM3U"):
+        return None
+
+    # A successful response alone doesn't prove the server honored -a1.
+    for line in playlist.splitlines():
+        if line.strip().startswith("#EXT-X-STREAM-INF:"):
+            attrs = _parse_attributes(line.split(":", 1)[1])
+            if attrs.get("RESOLUTION") or not re.fullmatch(
+                r"mp4a\.[\da-fA-F.]+", attrs.get("CODECS", "")
+            ):
+                return None
+
+    variants, _ = _parse_master_playlist(playlist, master)
+    return (
+        max(variants, key=lambda variant: variant.bandwidth).uri if variants else None
+    )
 
 
 def _select_audio_rendition(renditions, group_id, preferred_lang):
@@ -461,11 +490,14 @@ def download_hls_parallel(
     headers=None,
     preferred_audio_lang=None,
     label="",
+    *,
+    include_audio_rendition=True,
 ):
     """Download an HLS stream into local files ready for an FFmpeg remux.
 
     Returns a list of paths: `[video]` for a muxed stream, or
-    `[video, audio]` when the playlist carries audio as a separate rendition.
+    `[video, audio]` when the playlist carries a separate audio rendition
+    and the caller requests it.
 
     Raises `HLSUnsupported` when the playlist needs features this downloader
     does not implement — callers should fall back to plain FFmpeg then.
@@ -491,8 +523,12 @@ def download_hls_parallel(
         variant = max(variants, key=lambda item: item.bandwidth)
         video_playlist = variant.uri
 
-        rendition = _select_audio_rendition(
-            renditions, variant.audio_group, preferred_audio_lang
+        rendition = (
+            _select_audio_rendition(
+                renditions, variant.audio_group, preferred_audio_lang
+            )
+            if include_audio_rendition
+            else None
         )
         if rendition is not None:
             audio_playlist = rendition.uri
