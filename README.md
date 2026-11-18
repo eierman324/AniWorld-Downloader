@@ -14,9 +14,21 @@ The original, unchanged:
 
 [![Open the upstream mirror](https://img.shields.io/badge/open-models%20%28upstream%29-555555?style=for-the-badge&logo=github)](https://github.com/eierman324/AniWorld-Downloader/tree/models)
 
-## Install a feature
+## Install
 
-Each feature installs like the original package, from its branch (Python 3.11 or newer, plus [FFmpeg](https://ffmpeg.org/)). For the Mediathek:
+[![Latest release](https://img.shields.io/github/v/release/eierman324/AniWorld-Downloader?style=for-the-badge&label=release)](https://github.com/eierman324/AniWorld-Downloader/releases/latest)
+
+The [latest release](https://github.com/eierman324/AniWorld-Downloader/releases/latest) has standalone apps for Windows, Linux and macOS.
+
+**Docker:**
+
+```bash
+docker pull ghcr.io/eierman324/aniworld-downloader:latest
+```
+
+or the [`docker-compose.yaml`](https://github.com/eierman324/AniWorld-Downloader/blob/feature/mediathekview/docker-compose.yaml) from the Mediathek branch, which already points at this image.
+
+**Python** (3.11 or newer, plus [FFmpeg](https://ffmpeg.org/)), installed from a feature's branch. For the Mediathek:
 
 ```bash
 python -m pip install "aniworld @ git+https://github.com/eierman324/AniWorld-Downloader.git@feature/mediathekview"
