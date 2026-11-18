@@ -1,6 +1,6 @@
 services:
   aniworld:
-    image: ghcr.io/phoenixthrush/aniworld-downloader:latest
+    image: ghcr.io/eierman324/aniworld-downloader:latest
     container_name: aniworld-downloader
     # build: .
     ports:

@@ -1,4 +1,7 @@
-name: Publish to PyPI
+name: Attach Python package to release
+
+# In this fork the package goes to the GitHub release only. The original
+# project publishes `aniworld` to PyPI; this fork must not.
 
 on:
   release:
@@ -6,14 +9,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  pypi-publish:
-    name: Upload release to PyPI
+  package:
+    name: Build and attach the Python package
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/aniworld
     permissions:
-      id-token: write
       contents: write
 
     steps:
@@ -33,11 +32,9 @@ jobs:
         run: python -m build
 
       - name: Upload dist files to GitHub Release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.tar.gz
             dist/*.whl
-
-      - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
