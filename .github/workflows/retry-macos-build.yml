@@ -1,0 +1,51 @@
+name: Retry macOS build
+
+# GitHub sometimes has no free macOS runner, and the release build's macOS job
+# gets cancelled before it starts. Every few hours this checks the latest
+# release: if the macOS app is still missing and the job was cancelled for
+# that reason, it reruns the job. Once the app is there, or the job really
+# failed, this workflow switches itself off. Turn it back on in the Actions tab.
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Rerun the macOS job if needed
+        run: |
+          stop() { echo "$1"; gh workflow disable retry-macos-build.yml; exit 0; }
+
+          tag=$(gh release view --json tagName -q .tagName)
+          echo "Latest release: $tag"
+
+          if gh release view "$tag" --json assets -q '.assets[].name' | grep -qx 'AniWorldDownloader-macOS.tar.gz'; then
+            stop "macOS app is attached, nothing to do."
+          fi
+
+          run=$(gh run list --workflow build-nuitka.yaml --branch "$tag" --event release -L 1 --json databaseId -q '.[0].databaseId')
+          [ -n "$run" ] || stop "No release build found for $tag."
+
+          status=$(gh run view "$run" --json status -q .status)
+          if [ "$status" != "completed" ]; then
+            echo "Build $run is still $status, checking again later."
+            exit 0
+          fi
+
+          mac=$(gh run view "$run" --json jobs -q '.jobs[] | select(.name | contains("macos")) | .conclusion')
+          echo "macOS job: $mac"
+          case "$mac" in
+            cancelled) gh run rerun "$run" --failed && echo "Rerun started for build $run." ;;
+            success)   echo "macOS job succeeded, the upload should be there soon." ;;
+            *)         stop "macOS job ended with '$mac', not a runner shortage. Needs a look." ;;
+          esac
