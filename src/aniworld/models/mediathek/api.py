@@ -15,7 +15,7 @@ import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import unescape
 from urllib.parse import parse_qs, quote, unquote, urldefrag, urlencode
 
@@ -907,12 +907,17 @@ def quality_options(entry):
 
 _GENERIC_LABELS = {"hd": "Highest", "sd": "Medium", "low": "Lowest"}
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
 
 def broadcast_date(entry):
     timestamp = entry.get("timestamp")
     if not timestamp:
         return None
-    return datetime.fromtimestamp(int(timestamp), tz=_BROADCAST_TZ).date()
+    # Archive programmes predate 1970 (rbb Retro airs the Abendschau from the
+    # 1960s), and fromtimestamp rejects negative timestamps on Windows.
+    moment = _EPOCH + timedelta(seconds=int(timestamp))
+    return moment.astimezone(_BROADCAST_TZ).date()
 
 
 def result_title(entry):

@@ -1,5 +1,6 @@
 """Mediathek (public broadcasters via MediathekView), with the API stubbed."""
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -588,3 +589,18 @@ def test_season_topic_episodes_share_the_show_folder(stub, monkeypatch, tmp_path
     assert episode._episode_path == Path(
         tmp_path, "Soko Kitzbühel", "Season 02", "Soko Kitzbühel S02E007.mkv"
     )
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "expected"),
+    [
+        (1794780000, date(2026, 11, 15)),
+        # rbb Retro's Berliner Abendschau, 1960-01-15 19:30 in Berlin. Windows'
+        # fromtimestamp rejects anything before 1970.
+        (-314343000, date(1960, 1, 15)),
+        (0, None),
+        (None, None),
+    ],
+)
+def test_broadcast_date_handles_programmes_before_1970(timestamp, expected):
+    assert api.broadcast_date(_entry(timestamp=timestamp)) == expected
