@@ -116,13 +116,14 @@ def _prepare_resolution_naming(self):
     _set_naming_resolution(self, marker)
     patterns = [self._episode_path]
     if getattr(self, "season_episode_number", None) is not None:
-        from .naming import numbered_episode_path
+        from .naming import legacy_numbered_episode_paths, numbered_episode_path
 
         patterns.extend(
             numbered_episode_path(self, number, padding=padding)[1]
             for number in {self.episode_number, self.season_episode_number}
             for padding in (3, 2)
         )
+        patterns.extend(path for _, path in legacy_numbered_episode_paths(self))
     candidates = {
         Path(path)
         for pattern in patterns
@@ -145,24 +146,51 @@ def _finalize_resolution_naming(self):
     if hasattr(self, "season_episode_number"):
         from .naming import numbered_episode_path
 
-        for number in (self.episode_number, self.season_episode_number):
-            for padding in (3, 2):
-                if numbered_episode_path(self, number, padding=padding)[1] == old_path:
-                    variant = number, padding
-                    break
-            if variant is not None:
-                break
+        numbers = dict.fromkeys((self.episode_number, self.season_episode_number))
+        variant = next(
+            (
+                (number, padding, legacy_folders)
+                for legacy_folders in (False, True)
+                for number in numbers
+                for padding in (3, 2)
+                if numbered_episode_path(
+                    self, number, padding=padding, legacy_folders=legacy_folders
+                )[1]
+                == old_path
+            ),
+            None,
+        )
     _set_naming_resolution(self, _read_container_resolution(old_path))
-    new_path = (
-        numbered_episode_path(self, variant[0], padding=variant[1])[1]
-        if variant is not None
-        else self._episode_path
-    )
+    if variant is None:
+        new_path = self._episode_path
+    else:
+        number, padding, legacy_folders = variant
+        _, new_path = numbered_episode_path(
+            self, number, padding=padding, legacy_folders=legacy_folders
+        )
     if new_path != old_path:
         if new_path.exists():
             raise ValueError(f"Resolution output path already exists: {new_path}")
         new_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(old_path, new_path)
+
+
+def _media_title(self):
+    """Player label; a conflicting old file only has to stop downloads."""
+    try:
+        return self._file_name
+    except ValueError:
+        if not hasattr(self, "season_episode_number"):
+            raise
+        from .naming import numbered_episode_path
+        from .numbering import season_episode_numbers_enabled
+
+        number = (
+            self.season_episode_number
+            if season_episode_numbers_enabled()
+            else self.episode_number
+        )
+        return numbered_episode_path(self, number)[1].stem
 
 
 def _progress_file_name(self):
@@ -363,6 +391,9 @@ def _reset_provider_resolution_cache(self):
     for attr in list(vars(self)):
         if attr.endswith(("__redirect_url", "__provider_url")):
             setattr(self, attr, None)
+    clear_stream = getattr(self, "_clear_stream_url_cache", None)
+    if clear_stream is not None:
+        clear_stream()
 
 
 def _set_selected_provider(self, provider_name):
@@ -489,6 +520,27 @@ def _print_cli_progress(percent, time_str, speed_str, label=""):
 
 class DownloadCancelled(Exception):
     """Raised when we killed the download ourselves, not when it failed."""
+
+
+def _download_queue_id():
+    from ...playwright.captcha import _local
+
+    return getattr(_local, "queue_id", None)
+
+
+def _force_cancel_requested(queue_id=None):
+    """Whether the web queue force-cancelled this download."""
+    try:
+        if queue_id is None:
+            queue_id = _download_queue_id()
+        if queue_id is None:
+            return False
+
+        from ...web.db import is_queue_force_cancelled
+
+        return is_queue_force_cancelled(queue_id)
+    except Exception:
+        return False
 
 
 def _run_ffmpeg_with_progress(node, overwrite_output=True, label=""):
@@ -661,18 +713,11 @@ def _run_ffmpeg_with_progress(node, overwrite_output=True, label=""):
                     process.kill()
                     break
 
-                try:
-                    from ...playwright.captcha import _local
-                    from ...web.db import is_queue_force_cancelled
-
-                    qid = getattr(_local, "queue_id", None)
-                    if qid is not None and is_queue_force_cancelled(qid):
-                        logger.info("[FFmpeg] Force cancel requested, stopping.")
-                        cancelled = True
-                        process.kill()
-                        break
-                except Exception:
-                    pass
+                if _force_cancel_requested():
+                    logger.info("[FFmpeg] Force cancel requested, stopping.")
+                    cancelled = True
+                    process.kill()
+                    break
             elif line_str:
                 # Try to capture total duration from ffmpeg header
                 if total_duration == 0.0:
@@ -817,6 +862,8 @@ def _download_direct_http(episode_path, stream_url, file_name):
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 f.write(chunk)
                 downloaded += len(chunk)
+                if _force_cancel_requested():
+                    raise DownloadCancelled("Download cancelled")
 
                 if total:
                     pct = downloaded / total * 100
@@ -921,7 +968,6 @@ def _download_hls_stream(
                 temp_full,
                 {
                     "reconnect": 1,
-                    "reconnect_streamed": 1,
                     "reconnect_delay_max": 30,
                     "allowed_extensions": "ALL",
                     "headers": "".join(
@@ -975,6 +1021,8 @@ def download_hanime(self):
                 owner=self,
             )
             return
+        except DownloadCancelled:
+            raise
         except Exception as exc:
             last_error = exc
             if attempt < 3:
@@ -1039,8 +1087,10 @@ def _hls_uris(playlist, base_url):
     ]
 
 
-def _download_hls_manual(m3u8_url, headers, temp_ts, label=""):
-    """Fetch an HLS media playlist's segments over plain HTTP into `temp_ts`.
+def _download_hls_manual(
+    m3u8_url, headers, temp_ts, label="", preferred_audio_lang=None
+):
+    """Fetch HLS segments over HTTP and return the video and optional audio paths.
 
     Some hosters disguise their segments with non-media extensions
     (`.jpg`, `.css`, `.txt`) served from rotating hosts. Strict FFmpeg builds
@@ -1062,12 +1112,38 @@ def _download_hls_manual(m3u8_url, headers, temp_ts, label=""):
     if "#EXTM3U" not in playlist:
         raise _HLSManualUnsupported("not an m3u8 playlist")
 
-    # Master playlist → follow the last (usually highest-quality) variant.
+    # Master playlist → follow the highest-bandwidth variant, as hls.py does.
     if "#EXT-X-STREAM-INF" in playlist:
-        variants = _hls_uris(playlist, m3u8_url)
+        from .hls import (
+            HLSUnsupported,
+            _best_variant,
+            _default_headers,
+            _download_hls_playlists,
+            _parse_master_playlist,
+            _select_audio_rendition,
+        )
+
+        variants, renditions = _parse_master_playlist(playlist, m3u8_url)
         if not variants:
             raise _HLSManualUnsupported("master playlist with no variants")
-        m3u8_url = variants[-1]
+        variant = _best_variant(variants)
+        audio = _select_audio_rendition(
+            renditions, variant.audio_group, preferred_audio_lang
+        )
+        if audio is not None:
+            try:
+                video_path, audio_path = _download_hls_playlists(
+                    variant.uri,
+                    audio.uri,
+                    temp_ts,
+                    _default_headers(req_headers),
+                    label,
+                )
+            except HLSUnsupported as exc:
+                raise _HLSManualUnsupported(str(exc)) from exc
+            return video_path, audio_path
+
+        m3u8_url = variant.uri
         resp = session.get(m3u8_url, headers=req_headers, timeout=30)
         resp.raise_for_status()
         playlist = resp.text
@@ -1107,6 +1183,8 @@ def _download_hls_manual(m3u8_url, headers, temp_ts, label=""):
         with open(temp_ts, "wb") as out:
             for index, seg_url in enumerate(segments, start=1):
                 out.write(_fetch_hls_segment(session, seg_url, req_headers, seg_hosts))
+                if _force_cancel_requested():
+                    raise DownloadCancelled("Download cancelled")
                 percent = round(index / total * 100, 1)
                 with _ffmpeg_progress_lock:
                     _ffmpeg_progress.update(
@@ -1127,6 +1205,7 @@ def _download_hls_manual(m3u8_url, headers, temp_ts, label=""):
             _ffmpeg_progress.update(
                 percent=0.0, time="", speed="", bandwidth="", active=False
             )
+    return temp_ts, None
 
 
 def _hls_rendition_download(stream_url, temp_prefix, headers, audio_code, ep_label):
@@ -1176,15 +1255,26 @@ def _download_full_stream(
     normal/encrypted playlists, which then take the FFmpeg path.
     """
     if ".m3u8" in stream_url.split("?", 1)[0].lower():
+        from .hls import cleanup_temp_files
+
         temp_ts = temp_full.with_suffix(".seg.ts")
         try:
-            _download_hls_manual(stream_url, headers, temp_ts, ep_label)
+            video_path, audio_path = _download_hls_manual(
+                stream_url, headers, temp_ts, ep_label, preferred_audio_lang=audio_code
+            )
         except _HLSManualUnsupported as exc:
             logger.debug(f"[HLS] manual fetch not used ({exc}); using FFmpeg")
         else:
             try:
+                video = ffmpeg.input(str(video_path))
+                inputs = (
+                    (video.video, ffmpeg.input(str(audio_path)).audio)
+                    if audio_path is not None
+                    else (video,)
+                )
                 _run_ffmpeg_with_progress(
-                    ffmpeg.input(str(temp_ts)).output(
+                    ffmpeg.output(
+                        *inputs,
                         str(temp_full),
                         vcodec=video_codec,
                         acodec="copy",
@@ -1195,6 +1285,8 @@ def _download_full_stream(
                 return
             finally:
                 temp_ts.unlink(missing_ok=True)
+                if audio_path is not None:
+                    cleanup_temp_files(temp_ts)
 
     _run_ffmpeg_with_progress(
         ffmpeg.input(stream_url, **input_kwargs).output(
@@ -1299,6 +1391,9 @@ def download(self):
                 # these extensions allowed when fetching an m3u8 source.
                 if ".m3u8" in (stream_url or "").split("?", 1)[0].lower():
                     input_kwargs["allowed_extensions"] = "ALL"
+                    # With a chunked playlist response this makes FFmpeg
+                    # reload the playlist endlessly instead of reading segments.
+                    del input_kwargs["reconnect_streamed"]
 
                 os.makedirs(self._folder_path, exist_ok=True)
 
@@ -1550,7 +1645,8 @@ def download(self):
 def watch(self):
     """Watch the current episode with provider headers."""
 
-    print(f"[WATCHING] {self._file_name}")
+    title = _media_title(self)
+    print(f"[WATCHING] {title}")
 
     player_path = str(get_player_path())
     provider_order = _get_provider_attempt_order(self)
@@ -1576,7 +1672,7 @@ def watch(self):
         "--no-ytdl",
         "--fs",
         "--quiet",
-        f"--force-media-title={self._file_name}",
+        f"--force-media-title={title}",
     ]
 
     for provider_index, provider_name in enumerate(provider_order):
@@ -1632,7 +1728,8 @@ def watch(self):
 def syncplay(self):
     """Syncplay an episode (AniWorld + serienstream.to)."""
 
-    print(f"[Syncplaying] {self._file_name}")
+    title = _media_title(self)
+    print(f"[Syncplaying] {title}")
 
     stream_url, provider_name = _resolve_stream_url_with_fallback(self, "Syncplay")
 
@@ -1649,7 +1746,7 @@ def syncplay(self):
             syncplay_username = "AniWorld-Downloader"
 
     room = "AniWorld"
-    file_name = self._file_name.replace(" ", "_")
+    file_name = title.replace(" ", "_")
     if hasattr(self, "season_episode_number"):
         from .naming import numbered_episode_path
 
@@ -1703,9 +1800,7 @@ def syncplay(self):
         cmd.extend(skip_flags)
         logger.debug(f"[SKIP TIMES FOUND]: {skip_flags}")
 
-    cmd.extend(
-        ["--no-ytdl", "--fs", "--quiet", f"--force-media-title={self._file_name}"]
-    )
+    cmd.extend(["--no-ytdl", "--fs", "--quiet", f"--force-media-title={title}"])
 
     headers = PROVIDER_HEADERS_W.get(provider_name, {})
 

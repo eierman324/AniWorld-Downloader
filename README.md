@@ -47,6 +47,8 @@ pip install --upgrade git+https://github.com/phoenixthrush/AniWorld-Downloader.g
 
 Video downloads need **FFmpeg**. Watching uses **mpv**, or **IINA** on macOS. Synchronized playback requires **Syncplay and mpv**. The app can offer portable FFmpeg, mpv, and Syncplay installation on Windows, and player installation through supported package managers on macOS/Linux. Install FFmpeg yourself on macOS/Linux; unattended deployments should provide the required tools in advance.
 
+For optional uBlock Origin Lite in Patchright's Chromium, run `aniworld --setup-ublock` once after installing with pip and set `ANIWORLD_UBLOCK=1` in your `.env`. Docker includes the extension in the image. Set the same flag to enable it there.
+
 Prefer another installation method? Use [Docker](#docker) or download a standalone build from [GitHub Releases](https://github.com/phoenixthrush/AniWorld-Downloader/releases). See the [documentation](https://www.phoenixthrush.com/AniWorld-Downloader-Docs/) for platform-specific setup and troubleshooting.
 
 ## Features
@@ -56,7 +58,7 @@ Prefer another installation method? Use [Docker](#docker) or download a standalo
 - Schedule Auto-Sync checks for AniWorld titles already downloaded to your library.
 - Choose available audio and subtitle languages, with fallback to other stream hosters.
 - Customize supported naming templates and output formats, including MKV/MP4 for video and JPG/CBZ/EPUB for manga; naming support varies by backend.
-- AniWorld and SerienStream use explicit episode numbers from English titles, including `[Episode N]` and `[JP Episode N]`, with seasonal numbering as fallback and existing seasonal downloads recognised.
+- AniWorld and SerienStream use explicit episode numbers from English titles, including `[Episode N]` and `[JP Episode N]`, with seasonal numbering as fallback and existing seasonal downloads recognised. Set `ANIWORLD_SEASON_EPISODE_NUMBERS=1` or use the Web UI setting to keep seasonal numbering for new downloads. See [switching an existing library to seasonal numbering](https://www.phoenixthrush.com/AniWorld-Downloader-Docs/configuration#switching-an-existing-library-to-seasonal-numbering).
 - Watch through external players, with AniSkip and Anime4K support where applicable.
 
 The Web UI also supports local accounts, optional OIDC SSO, custom CSS, and background shaders. SSO alongside local login requires both `--web-auth` and `--web-sso`; `--web-force-sso` enables SSO-only authentication. A JSON API and optional Discord request bot let you connect it to other tools. Features and language availability vary by site.

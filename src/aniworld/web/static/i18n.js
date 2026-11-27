@@ -179,6 +179,11 @@
       "settings.disable_english_sub": "English-Sub-Downloads deaktivieren",
       "settings.disable_english_sub_hint":
         "English Sub wird aus der Sprachauswahl ausgeblendet und kann nicht heruntergeladen werden.",
+      "settings.season_episode_numbers": "Folgen pro Staffel nummerieren",
+      "settings.season_episode_numbers_hint":
+        "Neue Downloads bekommen die Folgennummer innerhalb der Staffel (S23E01) statt der absoluten Nummer aus dem englischen Titel (S23E1157). Praktisch für Bibliotheken, die nach Staffeln sortiert sind.",
+      "settings.season_episode_numbers_migration":
+        "Du stellst eine bestehende Bibliothek um? Wenn eine andere Folge den neuen Dateinamen bereits verwendet, stoppt der Download und die vorhandene Datei bleibt erhalten. Prüfe, welche Folge die Datei enthält. Wenn der passende Dateiname mit der Folgennummer innerhalb der Staffel frei ist, benenne sie um und starte den Download erneut.",
       "settings.show_all_languages": "Immer alle Sprachen anbieten",
       "settings.show_all_languages_hint":
         "Die Sprachauswahl zeigt normalerweise nur, was die erste Folge eines Titels hat. Schalte das ein, wenn eine spätere Folge eine Sprache dazubekommt. Folgen ohne die gewählte Sprache schlagen beim Download fehl.",
@@ -215,7 +220,7 @@
       "settings.export_hint":
         "Die meisten Einstellungen liegen nur im Arbeitsspeicher und fallen beim Neustart auf die Standardwerte zurück. Hier bekommst du eine .env-Datei mit dem, was gerade läuft, fertig zum Speichern unter dem oben genannten Pfad.",
       "settings.export_secrets":
-        "Passwörter und Tokens bleiben absichtlich draußen: der Discord-Token, das OIDC-Client-Secret und Admin-Passwörter bleiben, wo sie sind.",
+        "Passwörter und Tokens bleiben absichtlich draußen: der Discord-Token, URL und Header des Webhooks, das OIDC-Client-Secret und Admin-Passwörter bleiben, wo sie sind.",
       "settings.export_button": ".env herunterladen",
       "settings.library": "Bibliothek",
       "settings.sites": "Seiten",
@@ -346,6 +351,22 @@
       "settings.discord.running": "Läuft als {user}",
       "settings.discord.stopped": "Gestoppt",
       "settings.discord.unavailable": "discord.py ist nicht installiert",
+      "settings.webhook": "Webhook",
+      "settings.webhook.hint":
+        "Schickt eine Anfrage, sobald die Warteschlange leer ist und mindestens ein Download fertig wurde, z. B. um einen Bibliotheks-Scan in Jellyfin oder Plex zu starten oder eine Nachricht an ntfy oder Discord zu senden. Ohne URL ist er aus.",
+      "settings.webhook.url": "URL",
+      "settings.webhook.method": "Methode",
+      "settings.webhook.headers": "Header (optional)",
+      "settings.webhook.headers_hint":
+        'Als "Name: Wert", mehrere durch "|" getrennt. Jellyfin will seinen API-Schlüssel (Dashboard, API-Schlüssel) genau so:',
+      "settings.webhook.headers_example": 'Authorization: MediaBrowser Token="DEIN_API_SCHLÜSSEL"',
+      "settings.webhook.body": "Inhalt (optional)",
+      "settings.webhook.body_hint":
+        "Wird so gesendet, wie er ist. JSON geht als application/json raus, alles andere als Klartext. Discord lehnt eine Anfrage ohne Inhalt ab, ntfy zeigt ihn als Nachricht.",
+      "settings.webhook.secret_hint":
+        "Wird in deiner .env gespeichert und bleibt so nach einem Neustart erhalten. Die Header enthalten meist einen Token und werden nach dem Speichern nie wieder angezeigt: Lass die Punkte stehen, um sie zu behalten, oder überschreibe sie, um sie zu ersetzen.",
+      "settings.webhook.test": "Speichern und Test senden",
+      "settings.webhook.sending": "Wird gesendet...",
       "settings.ip": "IP-Prüfung",
       "settings.ip_hint":
         "Prüfe das nach dem Verbinden oder Trennen eines VPN, um die ausgehende IP zu bestätigen.",

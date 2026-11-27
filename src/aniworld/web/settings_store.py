@@ -2,8 +2,8 @@
 
 Settings live in environment variables. Most are session-only: they apply to the
 running process and reset on restart unless the user puts them in their .env.
-The Discord bot keys are the exception, a token that vanished on restart would
-be useless, so those are written through to the .env file.
+The Discord bot and webhook keys are the exception, a token or a webhook that
+vanished on restart would be useless, so those are written through to the .env.
 """
 
 import os
@@ -16,8 +16,9 @@ from ..config import (
     get_provider_fallback_order,
     parse_provider_order,
 )
+from ..env import quote_env_value
 from ..logger import get_logger
-from . import paths, schedule
+from . import paths, schedule, webhook
 from .media import SITE_KEYS, SITE_LABELS, SITES_OFF_BY_DEFAULT, WORKING_PROVIDERS
 
 logger = get_logger(__name__)
@@ -47,6 +48,13 @@ DISCORD_KEYS = {
     "guild_id": "ANIWORLD_DISCORD_GUILD_ID",
     "language": "ANIWORLD_DISCORD_LANGUAGE",
     "announce_channel_id": "ANIWORLD_DISCORD_ANNOUNCE_CHANNEL_ID",
+}
+
+WEBHOOK_KEYS = {
+    "url": "ANIWORLD_WEBHOOK_URL",
+    "method": "ANIWORLD_WEBHOOK_METHOD",
+    "headers": "ANIWORLD_WEBHOOK_HEADERS",
+    "body": "ANIWORLD_WEBHOOK_BODY",
 }
 
 _IP_LOOKUP_URLS = (
@@ -371,16 +379,85 @@ def _collect_discord(payload, updates):
             updates[DISCORD_KEYS[field]] = value
 
 
-def _persist_discord(updates):
-    subset = {k: v for k, v in updates.items() if k in set(DISCORD_KEYS.values())}
+def _persist(updates, keys, what, quote=False):
+    """Write the given group's keys from `updates` through to the .env."""
+    subset = {k: v for k, v in updates.items() if k in set(keys.values())}
     if not subset:
         return
+    if quote:
+        subset = {k: quote_env_value(v) for k, v in subset.items()}
     try:
         from ..env import persist_env_values
 
         persist_env_values(ANIWORLD_CONFIG_DIR / ".env", subset)
     except OSError as exc:
-        logger.warning("Could not persist Discord settings to .env: %s", exc)
+        logger.warning("Could not persist %s settings to .env: %s", what, exc)
+
+
+# ---------------------------------------------------------------------------
+# Webhook
+#
+# The headers usually hold a token (a Jellyfin API key), so like the Discord
+# token they never go back to the browser, the page gets a placeholder. The URL
+# is shown as it is: the admin who set it needs to see what it points at.
+# ---------------------------------------------------------------------------
+def webhook_settings():
+    return {
+        "url": webhook.webhook_url(),
+        "method": webhook.webhook_method(),
+        "headers_set": bool(os.environ.get(WEBHOOK_KEYS["headers"], "").strip()),
+        "body": webhook.webhook_body(),
+        "methods": list(webhook.METHODS),
+    }
+
+
+def _webhook_text(field, value):
+    """Refuse what the .env cannot hold: it keeps one value per line."""
+    if any(ch in value for ch in "\r\n\0"):
+        raise SettingsError(f"The webhook {field} has to fit on one line")
+    if "${" in value:
+        # python-dotenv expands it on the next start, even inside quotes
+        raise SettingsError(
+            f"The webhook {field} cannot contain ${{, "
+            "the .env would read it as a variable"
+        )
+    return value
+
+
+def _collect_webhook(payload, updates):
+    if not isinstance(payload, dict):
+        raise SettingsError("webhook must be an object")
+
+    if "url" in payload:
+        url = _webhook_text("URL", str(payload["url"]).strip())
+        if url:
+            try:
+                webhook.check_url(url)
+            except webhook.WebhookError as exc:
+                raise SettingsError(str(exc)) from None
+        updates[WEBHOOK_KEYS["url"]] = url
+
+    if "method" in payload:
+        method = str(payload["method"]).strip().upper()
+        if method not in webhook.METHODS:
+            raise SettingsError(f"Invalid webhook method: {method}")
+        updates[WEBHOOK_KEYS["method"]] = method
+
+    if "headers" in payload:
+        headers = str(payload["headers"]).strip()
+        # The UI echoes the placeholder back when the field was left alone
+        if headers != SECRET_PLACEHOLDER:
+            _webhook_text("headers", headers)
+            try:
+                webhook.parse_headers(headers, strict=True)
+            except webhook.WebhookError as exc:
+                raise SettingsError(str(exc)) from None
+            updates[WEBHOOK_KEYS["headers"]] = headers
+
+    if "body" in payload:
+        updates[WEBHOOK_KEYS["body"]] = _webhook_text(
+            "body", str(payload["body"]).strip()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +468,7 @@ def read_settings():
         "download_path": str(paths.default_download_path()),
         "lang_separation": paths.lang_separation_enabled(),
         "disable_english_sub": english_sub_disabled(),
+        "season_episode_numbers": _flag("ANIWORLD_SEASON_EPISODE_NUMBERS"),
         "show_all_languages": show_all_languages(),
         **{f"enable_{site}": state for site, state in enabled_sites().items()},
         "enable_library": library_enabled(),
@@ -422,12 +500,14 @@ def read_settings():
             for site in SITE_KEYS
         ],
         "discord": discord_settings(),
+        "webhook": webhook_settings(),
     }
 
 
 _BOOL_SETTINGS = {
     "lang_separation": "ANIWORLD_LANG_SEPARATION",
     "disable_english_sub": "ANIWORLD_DISABLE_ENGLISH_SUB",
+    "season_episode_numbers": "ANIWORLD_SEASON_EPISODE_NUMBERS",
     "show_all_languages": "ANIWORLD_SHOW_ALL_LANGUAGES",
     "enable_library": "ANIWORLD_ENABLE_LIBRARY",
     "enable_autosync": "ANIWORLD_ENABLE_AUTOSYNC",
@@ -545,11 +625,16 @@ def update_settings(data):
     if discord_changed:
         _collect_discord(data["discord"], updates)
 
+    if "webhook" in data:
+        _collect_webhook(data["webhook"], updates)
+
     for key, value in updates.items():
         os.environ[key] = value
 
     if discord_changed:
-        _persist_discord(updates)
+        _persist(updates, DISCORD_KEYS, "Discord")
+    # Quoted, a header or body is full of spaces, quotes and "#"
+    _persist(updates, WEBHOOK_KEYS, "webhook", quote=True)
 
     return discord_changed
 
@@ -589,6 +674,10 @@ def _env_sections():
                     _one_or_zero(paths.lang_separation_enabled()),
                 ),
                 ("ANIWORLD_DISABLE_ENGLISH_SUB", _one_or_zero(english_sub_disabled())),
+                (
+                    "ANIWORLD_SEASON_EPISODE_NUMBERS",
+                    _one_or_zero(_flag("ANIWORLD_SEASON_EPISODE_NUMBERS")),
+                ),
                 ("ANIWORLD_SHOW_ALL_LANGUAGES", _one_or_zero(show_all_languages())),
                 (
                     "ANIWORLD_MOVIE_FOLDER",
@@ -628,6 +717,13 @@ def _env_sections():
                 (DISCORD_KEYS["announce_channel_id"], discord["announce_channel_id"]),
             ],
         ),
+        (
+            "Webhook (the URL and headers can hold a token and are not exported)",
+            [
+                (WEBHOOK_KEYS["method"], webhook.webhook_method()),
+                (WEBHOOK_KEYS["body"], webhook.webhook_body()),
+            ],
+        ),
     ]
 
 
@@ -640,6 +736,9 @@ def _env_value(value):
     value = "" if value is None else str(value)
     if value and value[0] in "\"'" and value[-1] == value[0]:
         return value
+    if any(ch in value for ch in "\"'\\"):
+        # Plain double quotes around a JSON body would end at its first quote
+        return quote_env_value(value)
     return f'"{value}"' if any(ch in value for ch in " \t#") else value
 
 
@@ -653,7 +752,8 @@ def export_env():
         "# they will be there again after a restart.",
         "#",
         "# Passwords and tokens are deliberately not in here: the Discord bot token,",
-        "# the OIDC client secret and any admin password stay where they are.",
+        "# the webhook URL and headers, the OIDC client secret and any admin password",
+        "# stay where they are.",
     ]
     for heading, entries in _env_sections():
         lines.append("")

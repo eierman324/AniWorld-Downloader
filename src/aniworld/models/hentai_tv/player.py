@@ -155,7 +155,12 @@ def resolve_stream_url(player_url, timeout=45):
 def _resolve_browser(player_url, timeout):
     from patchright.sync_api import sync_playwright
 
-    from ...autodeps import ensure_patchright_chromium
+    from ...autodeps import (
+        ensure_chromium_system_dependencies,
+        ensure_patchright_chromium,
+        ensure_ublock_lite,
+        launch_ublock_context,
+    )
 
     ensure_patchright_chromium()
     with sync_playwright() as playwright:
@@ -165,8 +170,26 @@ def _resolve_browser(player_url, timeout):
                 "Patchright's Chromium browser is missing. "
                 "Run 'python -m patchright install chromium', then try again."
             )
+        ensure_chromium_system_dependencies(executable)
+        extension = ensure_ublock_lite()
         # Use full Chromium: a separate headless-shell installation isn't needed.
-        browser = playwright.chromium.launch(headless=True, executable_path=executable)
+        ublock = (
+            launch_ublock_context(
+                playwright.chromium,
+                extension,
+                headless=True,
+                executable_path=executable,
+            )
+            if extension
+            else None
+        )
+        if ublock is None:
+            browser = playwright.chromium.launch(
+                headless=True, executable_path=executable
+            )
+            close = browser.close
+        else:
+            browser, close = ublock
         try:
             page = browser.new_page()
             page.goto(player_url, wait_until="domcontentloaded", timeout=timeout * 1000)
@@ -192,4 +215,4 @@ def _resolve_browser(player_url, timeout):
                 page.wait_for_timeout(250)
             raise RuntimeError("Timed out waiting for the hentai.tv media URL")
         finally:
-            browser.close()
+            close()

@@ -40,23 +40,6 @@ _PROVIDER_BY_LOWER = {p.lower(): p for p in WORKING_PROVIDERS}
 # ---------------------------------------------------------------------------
 # Sites
 # ---------------------------------------------------------------------------
-# Site keys the front-end uses. Custom paths can be the default for any of them.
-SITE_KEYS = (
-    "aniworld",
-    "sto",
-    "megakino",
-    "mangafire",
-    "htv",
-    "hentaitv",
-    "hentaihaven",
-    "kinox",
-    "burningseries",
-    "filmpalast",
-    "filmo",
-    "moflix",
-    "mediathek",
-)
-
 SITE_LABELS = {
     "aniworld": "AniWorld",
     "sto": "SerienStream",
@@ -72,6 +55,9 @@ SITE_LABELS = {
     "moflix": "Moflix",
     "mediathek": "Mediathek",
 }
+
+# Site keys the front-end uses. Custom paths can be the default for any of them.
+SITE_KEYS = tuple(SITE_LABELS)
 
 # The order the tabs appear in on the home page, which is not the order the
 # keys happen to be declared in above.
@@ -337,7 +323,9 @@ def downloaded_episode_urls(series, episodes):
 
     found = set()
     for downloaded in _downloaded_episode_copies(series):
-        found.update(downloaded_episode_owners(episodes, downloaded).values())
+        found.update(
+            downloaded_episode_owners(episodes, downloaded, strict=False).values()
+        )
     return found
 
 

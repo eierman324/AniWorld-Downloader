@@ -1,9 +1,11 @@
-"""Settings, custom paths and Discord bot status."""
+"""Settings, custom paths, Discord bot status and the webhook test."""
+
+import sqlite3
 
 from flask import Response, jsonify, request
 
 from ...logger import get_logger
-from .. import db, schedule, settings_store, theming
+from .. import db, schedule, settings_store, theming, webhook
 from ..media import normalize_default_sites
 
 logger = get_logger(__name__)
@@ -23,6 +25,7 @@ def register(bp):
     bp.add_url_rule("/custom-shader", view_func=get_custom_shader)
     bp.add_url_rule("/custom-shader", view_func=update_custom_shader, methods=["PUT"])
     bp.add_url_rule("/discord/status", view_func=discord_status)
+    bp.add_url_rule("/webhook/test", view_func=send_test_webhook, methods=["POST"])
     bp.add_url_rule("/custom-paths", view_func=list_custom_paths)
     bp.add_url_rule("/custom-paths", view_func=add_custom_path, methods=["POST"])
     bp.add_url_rule(
@@ -102,6 +105,14 @@ def export_env():
         mimetype="text/plain",
         headers={"Content-Disposition": 'attachment; filename="aniworld.env"'},
     )
+
+
+def send_test_webhook():
+    """Send the saved webhook now, to try a setup without waiting for a download.
+
+    Always a 200: whether the service liked the request is in the body.
+    """
+    return jsonify(webhook.test())
 
 
 def _reconcile_discord():
@@ -220,7 +231,7 @@ def add_custom_path():
         path_id = db.add_custom_path(
             name, path, normalize_default_sites(data.get("default_sites"))
         )
-    except Exception:
+    except sqlite3.IntegrityError:
         return jsonify({"error": "A path with that name already exists"}), 409
     return jsonify({"ok": True, "id": path_id})
 
